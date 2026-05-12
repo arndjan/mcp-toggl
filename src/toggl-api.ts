@@ -118,6 +118,14 @@ export class TogglAPI {
     }
     throw new Error(`Project ${projectId} not found`);
   }
+
+  async archiveProject(workspaceId: number, projectId: number): Promise<Project> {
+    return this.request<Project>('PUT', `/workspaces/${workspaceId}/projects/${projectId}`, { active: false });
+  }
+
+  async deleteProject(workspaceId: number, projectId: number): Promise<void> {
+    await this.request<void>('DELETE', `/workspaces/${workspaceId}/projects/${projectId}`);
+  }
   
   // Client methods
   async getClients(workspaceId: number): Promise<Client[]> {
@@ -140,6 +148,23 @@ export class TogglAPI {
     throw new Error(`Client ${clientId} not found`);
   }
   
+  // Client CRUD methods
+  async createClient(workspaceId: number, name: string): Promise<Client> {
+    return this.request<Client>('POST', `/workspaces/${workspaceId}/clients`, { name, wid: workspaceId });
+  }
+
+  async updateClient(workspaceId: number, clientId: number, name: string): Promise<Client> {
+    return this.request<Client>('PUT', `/workspaces/${workspaceId}/clients/${clientId}`, { name });
+  }
+
+  async archiveClient(workspaceId: number, clientId: number): Promise<Client> {
+    return this.request<Client>('PUT', `/workspaces/${workspaceId}/clients/${clientId}`, { archived: true });
+  }
+
+  async deleteClient(workspaceId: number, clientId: number): Promise<void> {
+    await this.request<void>('DELETE', `/workspaces/${workspaceId}/clients/${clientId}`);
+  }
+
   // Task methods
   async getTasks(workspaceId: number, projectId: number): Promise<Task[]> {
     return this.request<Task[]>('GET', `/workspaces/${workspaceId}/projects/${projectId}/tasks`);
@@ -205,13 +230,13 @@ export class TogglAPI {
     await this.request<void>('DELETE', `/workspaces/${workspaceId}/time_entries/${timeEntryId}`);
   }
   
-  async startTimer(workspaceId: number, description?: string, projectId?: number, taskId?: number, tags?: string[]): Promise<TimeEntry> {
+  async startTimer(workspaceId: number, description?: string, projectId?: number, taskId?: number, tags?: string[], start?: string): Promise<TimeEntry> {
     const entry: Partial<CreateTimeEntryRequest> = {
       description,
       project_id: projectId,
       task_id: taskId,
       tags,
-      start: new Date().toISOString(),
+      start: start || new Date().toISOString(),
       duration: -1 // Negative duration indicates running timer
     };
     

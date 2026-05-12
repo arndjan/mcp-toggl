@@ -211,8 +211,51 @@ const tools: Tool[] = [
           type: 'array',
           items: { type: 'string' },
           description: 'Tags for the entry'
+        },
+        start: {
+          type: 'string',
+          description: 'Start time (ISO 8601, e.g. 2026-04-01T15:40:00+02:00). Defaults to now if not provided'
         }
       }
+    },
+  },
+  {
+    name: 'toggl_log_time',
+    description: 'Log a completed time block (not a running timer). Provide start + stop, or start + duration.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        description: {
+          type: 'string',
+          description: 'Description of the time entry'
+        },
+        workspace_id: {
+          type: 'number',
+          description: 'Workspace ID (uses default if not provided)'
+        },
+        project_id: {
+          type: 'number',
+          description: 'Project ID (optional)'
+        },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Tags for the entry'
+        },
+        start: {
+          type: 'string',
+          description: 'Start time (ISO 8601, e.g. 2026-04-07T09:45:00+02:00)'
+        },
+        stop: {
+          type: 'string',
+          description: 'Stop time (ISO 8601, e.g. 2026-04-07T11:30:00+02:00)'
+        },
+        duration_minutes: {
+          type: 'number',
+          description: 'Duration in minutes (alternative to stop time)'
+        }
+      },
+      required: ['start']
     },
   },
   {
@@ -397,6 +440,80 @@ const tools: Tool[] = [
     },
   },
   
+  {
+    name: 'toggl_create_client',
+    description: 'Create a new client in a workspace',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Client name' },
+        workspace_id: { type: 'number', description: 'Workspace ID (uses default if not provided)' }
+      },
+      required: ['name']
+    },
+  },
+  {
+    name: 'toggl_update_client',
+    description: 'Update a client name',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'number', description: 'Client ID' },
+        name: { type: 'string', description: 'New client name' },
+        workspace_id: { type: 'number', description: 'Workspace ID (uses default if not provided)' }
+      },
+      required: ['client_id', 'name']
+    },
+  },
+  {
+    name: 'toggl_archive_client',
+    description: 'Archive a client',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'number', description: 'Client ID' },
+        workspace_id: { type: 'number', description: 'Workspace ID (uses default if not provided)' }
+      },
+      required: ['client_id']
+    },
+  },
+  {
+    name: 'toggl_delete_client',
+    description: 'Delete a client permanently',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        client_id: { type: 'number', description: 'Client ID' },
+        workspace_id: { type: 'number', description: 'Workspace ID (uses default if not provided)' }
+      },
+      required: ['client_id']
+    },
+  },
+  {
+    name: 'toggl_archive_project',
+    description: 'Archive a project (sets active=false)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'number', description: 'Project ID' },
+        workspace_id: { type: 'number', description: 'Workspace ID (uses default if not provided)' }
+      },
+      required: ['project_id']
+    },
+  },
+  {
+    name: 'toggl_delete_project',
+    description: 'Delete a project permanently. Time entries on the project lose their project assignment.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'number', description: 'Project ID' },
+        workspace_id: { type: 'number', description: 'Workspace ID (uses default if not provided)' }
+      },
+      required: ['project_id']
+    },
+  },
+
   // Cache management
   {
     name: 'toggl_warm_cache',
@@ -548,7 +665,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args?.description as string | undefined,
           args?.project_id as number | undefined,
           args?.task_id as number | undefined,
-          args?.tags as string[] | undefined
+          args?.tags as string[] | undefined,
+          args?.start as string | undefined
         );
         
         await ensureCache();
@@ -566,6 +684,52 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
       
+      case 'toggl_log_time': {
+        const workspaceId = args?.workspace_id || defaultWorkspaceId;
+        if (!workspaceId) {
+          throw new Error('Workspace ID required (set TOGGL_DEFAULT_WORKSPACE_ID or provide workspace_id)');
+        }
+
+        const start = args?.start as string;
+        let stop = args?.stop as string | undefined;
+        let duration: number | undefined;
+
+        if (!stop && args?.duration_minutes) {
+          const startDate = new Date(start);
+          stop = new Date(startDate.getTime() + (args.duration_minutes as number) * 60000).toISOString();
+          duration = (args.duration_minutes as number) * 60;
+        } else if (stop) {
+          duration = Math.round((new Date(stop).getTime() - new Date(start).getTime()) / 1000);
+        }
+
+        if (!stop || !duration || duration <= 0) {
+          throw new Error('Provide either stop time or duration_minutes');
+        }
+
+        const entry = await api.createTimeEntry(workspaceId as number, {
+          description: args?.description as string | undefined,
+          project_id: args?.project_id as number | undefined,
+          tags: args?.tags as string[] | undefined,
+          start,
+          stop,
+          duration,
+        });
+
+        await ensureCache();
+        const hydrated = await cache.hydrateTimeEntries([entry]);
+
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              success: true,
+              message: 'Time entry logged',
+              entry: hydrated[0]
+            }, null, 2)
+          }]
+        };
+      }
+
       case 'toggl_stop_timer': {
         const current = await api.getCurrentTimeEntry();
         
@@ -856,6 +1020,54 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
       
+      case 'toggl_create_client': {
+        const workspaceId = args?.workspace_id || defaultWorkspaceId;
+        if (!workspaceId) throw new Error('Workspace ID required');
+        const client = await api.createClient(workspaceId as number, args?.name as string);
+        cache.clearCache();
+        return { content: [{ type: 'text', text: JSON.stringify(client, null, 2) }] };
+      }
+
+      case 'toggl_update_client': {
+        const workspaceId = args?.workspace_id || defaultWorkspaceId;
+        if (!workspaceId) throw new Error('Workspace ID required');
+        const client = await api.updateClient(workspaceId as number, args?.client_id as number, args?.name as string);
+        cache.clearCache();
+        return { content: [{ type: 'text', text: JSON.stringify(client, null, 2) }] };
+      }
+
+      case 'toggl_archive_client': {
+        const workspaceId = args?.workspace_id || defaultWorkspaceId;
+        if (!workspaceId) throw new Error('Workspace ID required');
+        const client = await api.archiveClient(workspaceId as number, args?.client_id as number);
+        cache.clearCache();
+        return { content: [{ type: 'text', text: JSON.stringify(client, null, 2) }] };
+      }
+
+      case 'toggl_delete_client': {
+        const workspaceId = args?.workspace_id || defaultWorkspaceId;
+        if (!workspaceId) throw new Error('Workspace ID required');
+        await api.deleteClient(workspaceId as number, args?.client_id as number);
+        cache.clearCache();
+        return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Client deleted' }) }] };
+      }
+
+      case 'toggl_archive_project': {
+        const workspaceId = args?.workspace_id || defaultWorkspaceId;
+        if (!workspaceId) throw new Error('Workspace ID required');
+        const project = await api.archiveProject(workspaceId as number, args?.project_id as number);
+        cache.clearCache();
+        return { content: [{ type: 'text', text: JSON.stringify(project, null, 2) }] };
+      }
+
+      case 'toggl_delete_project': {
+        const workspaceId = args?.workspace_id || defaultWorkspaceId;
+        if (!workspaceId) throw new Error('Workspace ID required');
+        await api.deleteProject(workspaceId as number, args?.project_id as number);
+        cache.clearCache();
+        return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Project deleted' }) }] };
+      }
+
       // Cache management
       case 'toggl_warm_cache': {
         const workspaceId = (args?.workspace_id as number | undefined) || defaultWorkspaceId;
