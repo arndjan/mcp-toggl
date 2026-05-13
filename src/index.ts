@@ -316,6 +316,18 @@ const tools: Tool[] = [
       required: ['entry_id']
     },
   },
+  {
+    name: 'toggl_delete_time_entry',
+    description: 'Delete a time entry permanently by ID.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        entry_id: { type: 'number', description: 'The time entry ID to delete' },
+        workspace_id: { type: 'number', description: 'Workspace ID (uses default if not provided)' }
+      },
+      required: ['entry_id']
+    },
+  },
 
   // Reporting tools
   {
@@ -487,6 +499,52 @@ const tools: Tool[] = [
         workspace_id: { type: 'number', description: 'Workspace ID (uses default if not provided)' }
       },
       required: ['client_id']
+    },
+  },
+  {
+    name: 'toggl_get_project',
+    description: 'Get a single Toggl project by ID (searches across workspaces).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'number', description: 'Project ID' }
+      },
+      required: ['project_id']
+    },
+  },
+  {
+    name: 'toggl_create_project',
+    description: 'Create a new Toggl project in a workspace.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Project name (required)' },
+        workspace_id: { type: 'number', description: 'Workspace ID (uses default if not provided)' },
+        client_id: { type: 'number', description: 'Toggl client ID to associate' },
+        color: { type: 'string', description: 'Hex color code (e.g. "#06a893")' },
+        active: { type: 'boolean', description: 'Whether the project is active (default true)' },
+        billable: { type: 'boolean', description: 'Whether billable (Pro only)' },
+        is_private: { type: 'boolean', description: 'Hide from non-managers (default false)' }
+      },
+      required: ['name']
+    },
+  },
+  {
+    name: 'toggl_update_project',
+    description: 'Update a Toggl project (name, client, color, active state). Only provided fields are changed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        project_id: { type: 'number', description: 'Project ID' },
+        workspace_id: { type: 'number', description: 'Workspace ID (uses default if not provided)' },
+        name: { type: 'string', description: 'New name' },
+        client_id: { type: ['number', 'null'], description: 'Client ID, or null to unlink' },
+        color: { type: 'string', description: 'Hex color code' },
+        active: { type: 'boolean', description: 'Active state (use archive_project for the conventional false)' },
+        billable: { type: 'boolean', description: 'Billable (Pro only)' },
+        is_private: { type: 'boolean', description: 'Private visibility' }
+      },
+      required: ['project_id']
     },
   },
   {
@@ -799,6 +857,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      case 'toggl_delete_time_entry': {
+        const workspaceId = (args?.workspace_id as number) || defaultWorkspaceId;
+        if (!workspaceId) throw new Error('Workspace ID required (set TOGGL_DEFAULT_WORKSPACE_ID or provide workspace_id)');
+        const entryId = args?.entry_id as number;
+        if (!entryId) throw new Error('entry_id is required');
+
+        await api.deleteTimeEntry(workspaceId, entryId);
+        cache.clearCache();
+        return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: `Time entry ${entryId} deleted` }) }] };
+      }
+
       // Reporting tools
       case 'toggl_daily_report': {
         await ensureCache();
@@ -1050,6 +1119,42 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         await api.deleteClient(workspaceId as number, args?.client_id as number);
         cache.clearCache();
         return { content: [{ type: 'text', text: JSON.stringify({ success: true, message: 'Client deleted' }) }] };
+      }
+
+      case 'toggl_get_project': {
+        const project = await api.getProject(args?.project_id as number);
+        return { content: [{ type: 'text', text: JSON.stringify(project, null, 2) }] };
+      }
+
+      case 'toggl_create_project': {
+        const workspaceId = (args?.workspace_id as number) || defaultWorkspaceId;
+        if (!workspaceId) throw new Error('Workspace ID required');
+        const fields: { name: string; client_id?: number; color?: string; active?: boolean; billable?: boolean; is_private?: boolean } = {
+          name: args?.name as string,
+        };
+        if (args?.client_id !== undefined) fields.client_id = args.client_id as number;
+        if (args?.color !== undefined) fields.color = args.color as string;
+        if (args?.active !== undefined) fields.active = args.active as boolean;
+        if (args?.billable !== undefined) fields.billable = args.billable as boolean;
+        if (args?.is_private !== undefined) fields.is_private = args.is_private as boolean;
+        const project = await api.createProject(workspaceId, fields);
+        cache.clearCache();
+        return { content: [{ type: 'text', text: JSON.stringify(project, null, 2) }] };
+      }
+
+      case 'toggl_update_project': {
+        const workspaceId = (args?.workspace_id as number) || defaultWorkspaceId;
+        if (!workspaceId) throw new Error('Workspace ID required');
+        const updates: { name?: string; client_id?: number | null; color?: string; active?: boolean; billable?: boolean; is_private?: boolean } = {};
+        if (args?.name !== undefined) updates.name = args.name as string;
+        if (args?.client_id !== undefined) updates.client_id = args.client_id as number | null;
+        if (args?.color !== undefined) updates.color = args.color as string;
+        if (args?.active !== undefined) updates.active = args.active as boolean;
+        if (args?.billable !== undefined) updates.billable = args.billable as boolean;
+        if (args?.is_private !== undefined) updates.is_private = args.is_private as boolean;
+        const project = await api.updateProject(workspaceId, args?.project_id as number, updates);
+        cache.clearCache();
+        return { content: [{ type: 'text', text: JSON.stringify(project, null, 2) }] };
       }
 
       case 'toggl_archive_project': {

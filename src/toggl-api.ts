@@ -119,6 +119,14 @@ export class TogglAPI {
     throw new Error(`Project ${projectId} not found`);
   }
 
+  async createProject(workspaceId: number, fields: { name: string; client_id?: number; color?: string; active?: boolean; billable?: boolean; is_private?: boolean }): Promise<Project> {
+    return this.request<Project>('POST', `/workspaces/${workspaceId}/projects`, { ...fields, wid: workspaceId });
+  }
+
+  async updateProject(workspaceId: number, projectId: number, updates: { name?: string; client_id?: number | null; color?: string; active?: boolean; billable?: boolean; is_private?: boolean }): Promise<Project> {
+    return this.request<Project>('PUT', `/workspaces/${workspaceId}/projects/${projectId}`, updates);
+  }
+
   async archiveProject(workspaceId: number, projectId: number): Promise<Project> {
     return this.request<Project>('PUT', `/workspaces/${workspaceId}/projects/${projectId}`, { active: false });
   }
